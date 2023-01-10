@@ -4,19 +4,6 @@ from airflow.utils.decorators import apply_defaults
 
 class LoadDimensionOperator(BaseOperator):
 
-    """
-    Loads dimension table in Redshift from data in staging table(s)
-    
-    :param redshift_conn_id: Redshift connection ID
-    :param table: Target table in Redshift to load
-    :param insert_sql: SQL query for getting data to load into target table
-    :param append_insert: Whether the append-insert or truncate-insert method
-        of loading should be used
-    :param primary key: When using the append-insert method, the column to check
-        if the row already exists in the target table. If there is a match, the
-        row in the target table will then be updated
-    """
-
     ui_color = '#80BD9E'
 
     @apply_defaults
@@ -24,7 +11,7 @@ class LoadDimensionOperator(BaseOperator):
                  redshift_conn_id="",
                  table="",
                  insert_sql="",
-                 append_insert=False,
+                 mode='append',
                  primary_key="",
                  *args, **kwargs):
         
@@ -32,34 +19,22 @@ class LoadDimensionOperator(BaseOperator):
         self.redshift_conn_id = redshift_conn_id
         self.table = table
         self.insert_sql = insert_sql
-        self.append_insert = append_insert
+        self.mode = mode
         self.primary_key = primary_key
+
     def execute(self, context):
         
         self.log.info("Getting credentials")
         redshift_hook = PostgresHook(postgres_conn_id=self.redshift_conn_id)
         
-        if self.append_insert:
-            table_insert_sql = f"""
-                create temp table stage_{self.table} (like {self.table}); 
-                
-                insert into stage_{self.table}
-                {self.insert_sql};
-                
-                delete from {self.table}
-                using stage_{self.table}
-                where {self.table}.{self.primary_key} = stage_{self.table}.{self.primary_key};
-                
-                insert into {self.table}
-                select * from stage_{self.table};
-            """
-        else:
-            table_insert_sql = f"""
-                insert into {self.table}
-                {self.insert_sql}
-            """
-            self.log.info("Clearing data from dimension table in Redshift")
-            redshift_hook.run(f"TRUNCATE TABLE {self.table};")
+        if self.mode == 'truncate':
+            self.log.info(f'Deleting data from {self.table} table...')
+            redshift_hook.run(f'DELETE FROM {self.table};')
+        
+        table_insert_sql = f"""
+            insert into {self.table}
+            {self.insert_sql}
+        """
 
         self.log.info("Loading data into dimension table in Redshift")
         redshift_hook.run(table_insert_sql)
